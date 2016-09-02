@@ -6,11 +6,11 @@ Source code for the AWS solution "AWS VPN Monitor".
 
 ## Cloudformation templates
 
-- cform/
+- cform/vpn-monitor.template
 
 ## Lambda source code
 
-- code/
+- code/vpn-monitor.py
 
 ***
 
