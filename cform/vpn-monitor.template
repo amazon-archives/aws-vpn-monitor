@@ -1,0 +1,271 @@
+ {
+    "AWSTemplateFormatVersion": "2010-09-09",
+    "Description": "(SO0004) - VPN Monitor: This template implements a VPN connection monitoring solution that creates CloudWatch custom metrics for all VPN connections in this account.",
+    "Parameters": {
+        "CWEventSchedule": {
+            "Description": "Choose between 1-minute (default) or 5-minute interval",
+            "Type": "String",
+            "Default": "cron(* * * * ? *)",
+            "AllowedValues": [
+                "cron(* * * * ? *)",
+                "cron(0/5 * * * ? *)"
+            ]
+        },
+        "SendAnonymousData": {
+            "Description": "Send anonymous data to AWS",
+            "Type": "String",
+            "Default": "Yes",
+            "AllowedValues": [
+                "Yes",
+                "No"
+            ]
+        }
+    },
+    "Metadata": {
+        "AWS::CloudFormation::Interface": {
+            "ParameterGroups": [
+                {
+                    "Label": {
+                        "default": "CloudWatch Event Schedule Configuration"
+                    },
+                    "Parameters": [
+                        "CWEventSchedule"
+                    ]
+                },
+                {
+                    "Label": {
+                        "default": "Anonymous Metrics Request"
+                    },
+                    "Parameters": [
+                        "SendAnonymousData"
+                    ]
+                }
+            ]
+        }
+    },
+    "Resources": {
+        "vpnMonitorRole": {
+            "Type": "AWS::IAM::Role",
+            "Properties": {
+                "AssumeRolePolicyDocument": {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Principal": {
+                                "Service": "lambda.amazonaws.com"
+                            },
+                            "Action": "sts:AssumeRole"
+                        }
+                    ]
+                },
+                "Path": "/",
+                "Policies": [
+                    {
+                        "PolicyName": "vpnMonitorPermissions",
+                        "PolicyDocument": {
+                            "Version": "2012-10-17",
+                            "Statement": [
+                                {
+                                    "Effect": "Allow",
+                                    "Action": [
+                                        "logs:CreateLogGroup",
+                                        "logs:CreateLogStream",
+                                        "logs:PutLogEvents"
+                                    ],
+                                    "Resource": "arn:aws:logs:*:*:*"
+                                },
+                                {
+                                    "Effect": "Allow",
+                                    "Action": [
+                                        "ec2:DescribeVpnConnections",
+                                        "ec2:DescribeRegions",
+                                        "cloudwatch:PutMetricData",
+                                        "cloudformation:DescribeStacks"
+                                    ],
+                                    "Resource": "*"
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+        },
+        "vpnTunnelStatus": {
+            "Type": "AWS::Lambda::Function",
+            "Properties": {
+                "Handler": "vpn-monitor.lambda_handler",
+                "Role": {
+                    "Fn::GetAtt": [
+                        "vpnMonitorRole",
+                        "Arn"
+                    ]
+                },
+                "Code": {
+                    "S3Bucket": {
+                        "Fn::Join": [
+                            "",
+                            [
+                                "solutions-builder-",
+                                {
+                                    "Ref": "AWS::Region"
+                                }
+                            ]
+                        ]
+                    },
+                    "S3Key": "vpn-monitor/v1/vpn-monitor.zip"
+                },
+                "Runtime": "python2.7",
+                "Timeout": "300"
+            }
+        },
+        "ScheduledRule": {
+            "Type": "AWS::Events::Rule",
+            "Properties": {
+                "Description": "Rule to trigger VPN Monitor function on a schedule",
+                "ScheduleExpression": {
+                    "Ref": "CWEventSchedule"
+                },
+                "State": "ENABLED",
+                "Targets": [
+                    {
+                        "Arn": {
+                            "Fn::GetAtt": [
+                                "vpnTunnelStatus",
+                                "Arn"
+                            ]
+                        },
+                        "Id": "TargetFunctionV1"
+                    }
+                ]
+            }
+        },
+        "PermissionForEventsToInvokeLambda": {
+            "Type": "AWS::Lambda::Permission",
+            "Properties": {
+                "FunctionName": {
+                    "Ref": "vpnTunnelStatus"
+                },
+                "Action": "lambda:InvokeFunction",
+                "Principal": "events.amazonaws.com",
+                "SourceArn": {
+                    "Fn::GetAtt": [
+                        "ScheduledRule",
+                        "Arn"
+                    ]
+                }
+            }
+        },
+        "SolutionHelperRole": {
+            "Type": "AWS::IAM::Role",
+            "Properties": {
+                "AssumeRolePolicyDocument": {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Principal": {
+                                "Service": "lambda.amazonaws.com"
+                            },
+                            "Action": "sts:AssumeRole"
+                        }
+                    ]
+                },
+                "Path": "/",
+                "Policies": [
+                    {
+                        "PolicyName": "Solution_Helper_Permissions",
+                        "PolicyDocument": {
+                            "Version": "2012-10-17",
+                            "Statement": [
+                                {
+                                    "Effect": "Allow",
+                                    "Action": [
+                                        "logs:CreateLogGroup",
+                                        "logs:CreateLogStream",
+                                        "logs:PutLogEvents"
+                                    ],
+                                    "Resource": "arn:aws:logs:*:*:log-group:/aws/lambda/*"
+                                },
+                                {
+                                    "Effect": "Allow",
+                                    "Action": [
+                                        "lambda:AddPermission",
+                                        "lambda:CreateFunction",
+                                        "lambda:DeleteFunction",
+                                        "lambda:GetFunction",
+                                        "lambda:UpdateFunctionCode",
+                                        "lambda:UpdateFunctionConfiguration",
+                                        "iam:PassRole"
+                                    ],
+                                    "Resource": "*"
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+        },
+        "SolutionHelper": {
+            "Type": "AWS::Lambda::Function",
+            "Properties": {
+                "Handler": "solution-helper.lambda_handler",
+                "Role": {
+                    "Fn::GetAtt": [
+                        "SolutionHelperRole",
+                        "Arn"
+                    ]
+                },
+                "Description": "This function creates a CloudFormation custom lambda resource that creates custom lambda functions by finding and replacing specific values from existing lambda function code.",
+                "Code": {
+                    "S3Bucket": {
+                        "Fn::Join": [
+                            "",
+                            [
+                                "solutions-",
+                                {
+                                    "Ref": "AWS::Region"
+                                }
+                            ]
+                        ]
+                    },
+                    "S3Key": "library/solution-helper/v1/solution-helper.zip"
+                },
+                "Runtime": "python2.7",
+                "Timeout": "60"
+            }
+        },
+        "CreateUniqueID": {
+            "Type": "Custom::CreateUUID",
+            "Properties": {
+                "ServiceToken": {
+                    "Fn::GetAtt": [
+                        "SolutionHelper",
+                        "Arn"
+                    ]
+                },
+                "Region": {
+                    "Ref": "AWS::Region"
+                },
+                "CreateUniqueID": "true"
+            }
+        }
+    },
+    "Outputs": {
+        "UUID": {
+            "Description": "Newly created random UUID.",
+            "Value": {
+                "Fn::GetAtt": [
+                    "CreateUniqueID",
+                    "UUID"
+                ]
+            }
+        },
+        "AnonymousData": {
+            "Description": "Send Anonymous Data",
+            "Value": {
+                "Ref": "SendAnonymousData"
+            }
+        }
+    }
+ }
